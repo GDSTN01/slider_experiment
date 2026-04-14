@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Thickness slider — visual prototype</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: #0a0e14;
+    color: #e8eef5;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", system-ui, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 24px;
+    overscroll-behavior: none;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .slider-card {
+    width: 92vw;
+    max-width: 520px;
+    background: #11161e;
+    border-radius: 18px;
+    padding: 18px 14px 22px;
+    box-shadow: 0 8px 28px rgba(0,0,0,0.4);
+    touch-action: none;
+  }
+  .label {
+    font-size: 12px;
+    letter-spacing: 0.18em;
+    color: #5a6675;
+    font-weight: 700;
+    margin: 4px 8px 4px;
+  }
+  svg { width: 100%; height: auto; display: block; touch-action: none; overflow: visible; }
+
+  .value-label { font-weight: 800; font-size: 16px; fill: #ffffff; }
+  .tick        { stroke: #2c3540; stroke-width: 1; }
+  .tick-mid    { stroke: #3b4654; stroke-width: 1; }
+  .tick-major  { stroke: #5a6675; stroke-width: 1.2; }
+  .tick-active { stroke: #32BE78; stroke-width: 1.8; transition: stroke 80ms ease; }
+  .tick-label  { fill: #4a5562; font-size: 10px; font-weight: 600; letter-spacing: 0.08em; }
+
+  .baseline    { fill: none; stroke: #32BE78; stroke-width: 1.2; stroke-linecap: round; }
+  .glow-soft   { fill: none; stroke: #74ff6a; stroke-width: 14; stroke-linecap: round; opacity: 0.18; filter: url(#blurBig); }
+  .glow-core   { fill: none; stroke: #9bff7a; stroke-width: 6;  stroke-linecap: round; opacity: 0.55; filter: url(#blurSmall); }
+
+  .knob-shadow { fill: rgba(0,0,0,0.6); filter: url(#blurKnob); transition: opacity 120ms ease; }
+  .knob-bg     { fill: #1a212c; }
+  .knob-ring   { fill: none; stroke: #2a323d; stroke-width: 1; transition: stroke 140ms ease, stroke-width 140ms ease; }
+  .knob-hit    { fill: transparent; cursor: grab; }
+  .arrow       { fill: #6a7585; transition: fill 140ms ease; }
+
+  /* Pressed/grabbed state */
+  #knob.pressed .knob-ring  { stroke: #32BE78; stroke-width: 1.6; }
+  #knob.pressed .knob-shadow{ opacity: 1.4; }
+  #knob.pressed .arrow      { fill: #aab6c4; }
+  #knob.pressed .knob-hit   { cursor: grabbing; }
+
+  .readout {
+    color: #6a7585;
+    font-size: 12px;
+    letter-spacing: 0.1em;
+  }
+  .readout b { color: #32BE78; font-weight: 700; }
+</style>
+</head>
+<body>
+
+<div class="slider-card" id="card">
+  <div class="label">THICKNESS (MM)</div>
+  <svg id="svg" viewBox="0 0 520 200" preserveAspectRatio="xMidYMid meet" aria-label="Thickness slider">
+    <defs>
+      <filter id="blurSmall" x="-20%" y="-50%" width="140%" height="200%">
+        <feGaussianBlur stdDeviation="2.5"/>
+      </filter>
+      <filter id="blurBig" x="-20%" y="-100%" width="140%" height="300%">
+        <feGaussianBlur stdDeviation="6"/>
+      </filter>
+      <filter id="blurKnob" x="-50%" y="-50%" width="200%" height="200%">
+        <feGaussianBlur stdDeviation="4"/>
+      </filter>
+    </defs>
+
+    <!-- Ruler ticks + decade labels -->
+    <g id="ruler"></g>
+
+    <!-- Floating value above the bump -->
+    <text id="valueLabel" class="value-label" text-anchor="middle" y="36">4.0</text>
+
+    <!-- Curve: soft halo, then core glow, then crisp baseline -->
+    <!-- Glow disabled — uncomment to re-enable -->
+    <!-- <path id="glowSoft" class="glow-soft" /> -->
+    <!-- <path id="glowCore" class="glow-core" /> -->
+    <path id="baseline" class="baseline" />
+
+    <!-- Knob (drag handle). Inner <g id="knobInner"> handles press-scale so transforms compose cleanly. -->
+    <g id="knob" transform="translate(260,150)">
+      <g id="knobInner">
+        <circle class="knob-shadow" cx="0" cy="6" r="30"/>
+        <circle class="knob-bg"     cx="0" cy="0" r="28"/>
+        <circle class="knob-ring"   cx="0" cy="0" r="28"/>
+        <!-- Left + right arrow affordance -->
+        <path class="arrow" d="M -11 0 L -4 -6 L -4 6 Z"/>
+        <path class="arrow" d="M  11 0 L  4 -6 L  4 6 Z"/>
+        <!-- Generous touch target (44pt-equivalent), invisible. Sits last so it's on top for hits. -->
+        <circle class="knob-hit" cx="0" cy="0" r="36"/>
+      </g>
+    </g>
+  </svg>
+</div>
+
+<div class="readout">VALUE: <b id="readout">4.0</b> MM</div>
+
+<script>
+  // ---- Geometry ----
+  const VB_W = 520, VB_H = 200;
+  const PADDING = 26;
+  const TRACK_Y = 100;     // baseline y
+  const RULER_Y = 82;      // tick baseline (ticks grow upward from here)
+  const KNOB_Y  = 150;     // puck center y
+  const MIN = 0.5, MAX = 8.5;
+  const STEP = 0.5;
+  const NUM_STEPS = Math.round((MAX - MIN) / STEP); // 16 intervals, 17 detents
+  const trackLeft  = PADDING;
+  const trackRight = VB_W - PADDING;
+  const trackWidth = trackRight - trackLeft;
+
+  // Bump shape parameters — tweak these to taste
+  const BUMP_AMP   = 24;   // peak height in svg units
+  const BUMP_SIGMA = 26;   // controls width; smaller = sharper
+
+  let value = 4.0;
+  const tickElements = []; // index 0..NUM_STEPS — for active-tick highlight
+  let activeStepIdx = -1;
+  let clickPulse = 0;      // 0..1, decays after each detent crossing
+
+  const svg        = document.getElementById('svg');
+  const baseline   = document.getElementById('baseline');
+  const glowCore   = document.getElementById('glowCore');
+  const glowSoft   = document.getElementById('glowSoft');
+  const knob       = document.getElementById('knob');
+  const knobInner  = document.getElementById('knobInner');
+  const knobHit    = knob.querySelector('.knob-hit');
+  const valueLabel = document.getElementById('valueLabel');
+  const rulerG     = document.getElementById('ruler');
+  const readout    = document.getElementById('readout');
+
+  // Knob feel state
+  let knobYOffset = 0;     // current vertical drift from rail (svg units, +down)
+  let pressScale  = 1;     // 1 normal, ~1.08 when grabbed
+  const MAX_Y_PULL = 16;   // asymptotic max vertical drift
+
+  // ---- Build the ruler once ----
+  // Every detent gets a tick. Integers get longer ticks + a label. Half-stops are shorter.
+  function buildRuler() {
+    for (let i = 0; i <= NUM_STEPS; i++) {
+      const v = MIN + i * STEP;
+      const x = valueToX(v);
+      const isInteger = Math.abs(v - Math.round(v)) < 1e-6;
+      const tickH = isInteger ? 11 : 6;
+      const cls   = isInteger ? 'tick-major' : 'tick-mid';
+
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      line.setAttribute('x1', x); line.setAttribute('x2', x);
+      line.setAttribute('y1', RULER_Y - tickH);
+      line.setAttribute('y2', RULER_Y);
+      line.setAttribute('class', cls);
+      rulerG.appendChild(line);
+      tickElements[i] = line;
+
+      if (isInteger) {
+        const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        t.setAttribute('x', x);
+        t.setAttribute('y', RULER_Y - 16);
+        t.setAttribute('text-anchor', 'middle');
+        t.setAttribute('class', 'tick-label');
+        t.textContent = Math.round(v);
+        rulerG.appendChild(t);
+      }
+    }
+  }
+
+  // Snap a continuous value to the nearest detent.
+  function snap(v) {
+    const idx = Math.round((v - MIN) / STEP);
+    const clamped = Math.max(0, Math.min(NUM_STEPS, idx));
+    return MIN + clamped * STEP;
+  }
+  function valueToStepIdx(v) {
+    return Math.round((v - MIN) / STEP);
+  }
+  function fmt(v) {
+    return v.toFixed(1); // "0.5", "1.0", "8.5"
+  }
+  function setActiveTick(idx) {
+    if (idx === activeStepIdx) return;
+    if (activeStepIdx >= 0 && tickElements[activeStepIdx]) {
+      tickElements[activeStepIdx].classList.remove('tick-active');
+    }
+    if (tickElements[idx]) tickElements[idx].classList.add('tick-active');
+    if (activeStepIdx !== -1) triggerClick(); // detent crossed (skip first paint)
+    activeStepIdx = idx;
+  }
+  function triggerClick() {
+    clickPulse = 1;
+    startRaf();
+  }
+
+  function valueToX(v) {
+    return trackLeft + ((v - MIN) / (MAX - MIN)) * trackWidth;
+  }
+  function xToValue(x) {
+    const t = (x - trackLeft) / trackWidth;
+    return Math.max(MIN, Math.min(MAX, MIN + t * (MAX - MIN)));
+  }
+
+  // ---- Build the gaussian-bump path for the baseline ----
+  function buildPath(handleX) {
+    const step = 2;
+    let d = `M ${trackLeft} ${TRACK_Y}`;
+    for (let x = trackLeft + step; x <= trackRight - step; x += step) {
+      const dx = x - handleX;
+      const y  = TRACK_Y - BUMP_AMP * Math.exp(-(dx * dx) / (2 * BUMP_SIGMA * BUMP_SIGMA));
+      d += ` L ${x.toFixed(1)} ${y.toFixed(1)}`;
+    }
+    d += ` L ${trackRight} ${TRACK_Y}`;
+    return d;
+  }
+
+  function render() {
+    const x = valueToX(value);
+    const path = buildPath(x);
+    baseline.setAttribute('d', path);
+    if (glowCore) glowCore.setAttribute('d', path);
+    if (glowSoft) glowSoft.setAttribute('d', path);
+    // Outer transform: position. Inner transform: lift + scale on grab + click pulse.
+    knob.setAttribute('transform', `translate(${x.toFixed(2)},${(KNOB_Y + knobYOffset).toFixed(2)})`);
+    const effectiveScale = pressScale + clickPulse * 0.06;
+    knobInner.setAttribute('transform', `scale(${effectiveScale.toFixed(3)})`);
+    valueLabel.setAttribute('x', x.toFixed(1));
+    valueLabel.setAttribute('y', (TRACK_Y - BUMP_AMP - 14).toFixed(1));
+    valueLabel.textContent = fmt(value);
+    readout.textContent = fmt(value);
+    setActiveTick(valueToStepIdx(value));
+  }
+
+  // ---- Convert client coords -> SVG viewBox coords ----
+  function clientToSvgX(clientX) {
+    const rect  = svg.getBoundingClientRect();
+    const ratio = VB_W / rect.width;
+    return (clientX - rect.left) * ratio;
+  }
+
+  // ---- Convert client Y -> SVG viewBox Y ----
+  function clientToSvgY(clientY) {
+    const rect  = svg.getBoundingClientRect();
+    const ratio = VB_H / rect.height;
+    return (clientY - rect.top) * ratio;
+  }
+
+  // Asymptotic rubber-band: small pulls track ~1:1, pulls saturate at ±max.
+  function rubber(delta, max) {
+    const a = Math.abs(delta);
+    return Math.sign(delta) * (a * max) / (a + max);
+  }
+
+  // ---- Drag state ----
+  let mode = null;            // 'grab' (knob picked up) | 'scrub' (track tap, knob animates over)
+  let grabValueAtDown = 0;    // value when grab started
+  let grabSvgXAtDown  = 0;    // svg-x of finger at grab start
+  let grabSvgYAtDown  = 0;    // svg-y of finger at grab start
+  let scrubTarget = null;     // for animated track-tap
+  let scrubVel = 0;
+  let rafId = null;
+
+  function startRaf() {
+    if (rafId == null) rafId = requestAnimationFrame(tick);
+  }
+
+  // Spring constants
+  const Y_STIFF  = 0.22;
+  const Y_DAMP   = 0.62;
+  let yVel = 0;
+
+  // Scrub (jump-to) animation constants
+  const SCRUB_STIFF = 0.28;
+  const SCRUB_DAMP  = 0.55;
+
+  function tick() {
+    let needsMore = false;
+
+    // Vertical spring-back when not grabbed
+    if (mode !== 'grab' && (Math.abs(knobYOffset) > 0.05 || Math.abs(yVel) > 0.05)) {
+      const force = -Y_STIFF * knobYOffset;
+      yVel = (yVel + force) * Y_DAMP;
+      knobYOffset += yVel;
+      needsMore = true;
+    } else if (mode !== 'grab') {
+      knobYOffset = 0; yVel = 0;
+    }
+
+    // Press-scale ease toward target
+    const targetScale = (mode === 'grab') ? 1.08 : 1.0;
+    if (Math.abs(pressScale - targetScale) > 0.002) {
+      pressScale += (targetScale - pressScale) * 0.25;
+      needsMore = true;
+    } else {
+      pressScale = targetScale;
+    }
+
+    // Click pulse decay
+    if (clickPulse > 0.01) {
+      clickPulse *= 0.78;
+      needsMore = true;
+    } else {
+      clickPulse = 0;
+    }
+
+    // Track-tap animated scrub toward target value
+    if (mode === 'scrub' && scrubTarget != null) {
+      const force = -SCRUB_STIFF * (value - scrubTarget);
+      scrubVel = (scrubVel + force) * SCRUB_DAMP;
+      value += scrubVel;
+      if (Math.abs(value - scrubTarget) < 0.05 && Math.abs(scrubVel) < 0.05) {
+        value = scrubTarget; scrubTarget = null; scrubVel = 0; mode = null;
+      } else {
+        needsMore = true;
+      }
+    }
+
+    render();
+    rafId = needsMore ? requestAnimationFrame(tick) : null;
+  }
+
+  // ---- Hit handlers ----
+  function onKnobDown(e) {
+    e.preventDefault();
+    e.stopPropagation();          // prevent track from also handling it
+    knob.setPointerCapture(e.pointerId);
+    knob.classList.add('pressed');
+    mode = 'grab';
+    grabValueAtDown = value;
+    grabSvgXAtDown  = clientToSvgX(e.clientX);
+    grabSvgYAtDown  = clientToSvgY(e.clientY);
+    yVel = 0;
+    startRaf();
+  }
+  function onKnobMove(e) {
+    if (mode !== 'grab') return;
+    e.preventDefault();
+    const dxSvg = clientToSvgX(e.clientX) - grabSvgXAtDown;
+    const dySvg = clientToSvgY(e.clientY) - grabSvgYAtDown;
+    // Convert horizontal delta into a value delta (preserves grab offset)
+    const valuePerSvgX = (MAX - MIN) / trackWidth;
+    const raw = grabValueAtDown + dxSvg * valuePerSvgX;
+    value = snap(raw);
+    // Click pulse is fired centrally by setActiveTick() in render().
+    // Vertical drift with rubber-band, asymptote at ±MAX_Y_PULL
+    knobYOffset = rubber(dySvg, MAX_Y_PULL);
+    render();
+  }
+  function onKnobUp(e) {
+    if (mode !== 'grab') return;
+    try { knob.releasePointerCapture(e.pointerId); } catch (_) {}
+    knob.classList.remove('pressed');
+    mode = null;        // tick() will spring knobYOffset back to 0
+    yVel = 0;
+    startRaf();
+  }
+
+  // Track-tap: animate the knob toward a SNAPPED target rather than teleport.
+  function onTrackDown(e) {
+    if (mode === 'grab') return;
+    e.preventDefault();
+    scrubTarget = snap(xToValue(clientToSvgX(e.clientX)));
+    scrubVel = 0;
+    mode = 'scrub';
+    startRaf();
+  }
+
+  knob.addEventListener('pointerdown',   onKnobDown);
+  knob.addEventListener('pointermove',   onKnobMove);
+  knob.addEventListener('pointerup',     onKnobUp);
+  knob.addEventListener('pointercancel', onKnobUp);
+  svg .addEventListener('pointerdown',   onTrackDown);
+
+  buildRuler();
+  render();
+</script>
+</body>
+</html>
