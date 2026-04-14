@@ -208,8 +208,65 @@
     if (activeStepIdx !== -1) triggerClick(); // detent crossed (skip first paint)
     activeStepIdx = idx;
   }
+  // ---- Tactile feedback ----
+  // Android: real haptics via Vibration API.
+  // iOS: no haptic API exposed to the web — we synthesize a sub-15ms audio click
+  // that the brain perceives as a tick when paired with the synchronized visual pulse.
+  const HAS_VIBRATE = typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function';
+  const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.userAgent.includes('Mac') && 'ontouchend' in document);
+
+  let audioCtx = null;
+  let clickBuffer = null;
+  let audioInitTried = false;
+
+  // Lazy-init the AudioContext on first user gesture (required by browser autoplay rules).
+  function initAudioOnce() {
+    if (audioInitTried) return;
+    audioInitTried = true;
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      audioCtx = new Ctx();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      // Pre-compute a short noise burst with exponential decay → reads as a "tick"
+      const len = Math.floor(audioCtx.sampleRate * 0.012); // 12ms
+      clickBuffer = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
+      const data = clickBuffer.getChannelData(0);
+      for (let i = 0; i < len; i++) {
+        const t = i / len;
+        data[i] = (Math.random() * 2 - 1) * Math.exp(-t * 35); // sharp attack, fast decay
+      }
+    } catch (_) { audioCtx = null; }
+  }
+
+  function playClick() {
+    if (!audioCtx || !clickBuffer) return;
+    try {
+      const src = audioCtx.createBufferSource();
+      src.buffer = clickBuffer;
+      // Bandpass shapes white noise into a "tick" — emphasis around 2.4kHz.
+      // Higher freq → more "snappy" / "plasticky"; lower → more "thuddy".
+      const bp = audioCtx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.value = 2400;
+      bp.Q.value = 0.9;
+      const gain = audioCtx.createGain();
+      gain.gain.value = 0.12; // keep quiet — this should feel ambient, not announce itself
+      src.connect(bp).connect(gain).connect(audioCtx.destination);
+      src.start();
+    } catch (_) {}
+  }
+
   function triggerClick() {
     clickPulse = 1;
+    if (HAS_VIBRATE) {
+      // Sharp tactile tick on Android. ~8ms reads as a "click" not a buzz.
+      try { navigator.vibrate(8); } catch (_) {}
+    }
+    if (IS_IOS) {
+      playClick();
+    }
     startRaf();
   }
 
@@ -343,6 +400,7 @@
   function onKnobDown(e) {
     e.preventDefault();
     e.stopPropagation();          // prevent track from also handling it
+    initAudioOnce();              // unlock audio on first gesture (iOS requirement)
     knob.setPointerCapture(e.pointerId);
     knob.classList.add('pressed');
     mode = 'grab';
@@ -379,6 +437,7 @@
   function onTrackDown(e) {
     if (mode === 'grab') return;
     e.preventDefault();
+    initAudioOnce();              // unlock audio on first gesture (iOS requirement)
     scrubTarget = snap(xToValue(clientToSvgX(e.clientX)));
     scrubVel = 0;
     mode = 'scrub';
